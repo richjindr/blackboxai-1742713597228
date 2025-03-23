@@ -4,25 +4,23 @@ import SwiftUI
 
 class PlantViewModel: ObservableObject {
     @Published var plants: [Plant] = []
-    @Published var deadPlants: [Plant] = []
     @Published var searchText: String = ""
     @Published var showingError = false
     @Published var errorMessage = ""
     
-    let viewContext: NSManagedObjectContext
+    private let viewContext: NSManagedObjectContext
     private let notificationManager = NotificationManager.shared
     
     init(context: NSManagedObjectContext) {
         self.viewContext = context
         fetchPlants()
-        fetchDeadPlants()
+        print("PlantViewModel initialized")
     }
     
     // MARK: - Fetch Operations
     
     func fetchPlants() {
         let request = NSFetchRequest<Plant>(entityName: "Plant")
-        request.predicate = NSPredicate(format: "isDead == NO")
         request.sortDescriptors = [NSSortDescriptor(keyPath: \Plant.orderIndex, ascending: true)]
         
         do {
@@ -30,17 +28,6 @@ class PlantViewModel: ObservableObject {
             print("Fetched \(plants.count) plants")
         } catch {
             showError("Chyba při načítání rostlin: \(error.localizedDescription)")
-        }
-    }
-    
-    func fetchDeadPlants() {
-        let request = Plant.deadPlantsFetchRequest()
-        
-        do {
-            deadPlants = try viewContext.fetch(request)
-            print("Fetched \(deadPlants.count) dead plants")
-        } catch {
-            showError("Chyba při načítání zemřelých rostlin: \(error.localizedDescription)")
         }
     }
     
@@ -56,24 +43,22 @@ class PlantViewModel: ObservableObject {
         lastFertilizing: Date,
         substrateType: String,
         distanceFromWindow: String,
-        humidity: String,
-        room: Room?
+        humidity: String
     ) {
         viewContext.performAndWait {
-            let plant = Plant.create(
-                in: viewContext,
-                scientificName: plantInfo.id,
-                customName: customName,
-                height: height,
-                potSize: potSize,
-                potType: potType,
-                lastWatering: lastWatering,
-                lastFertilizing: lastFertilizing,
-                substrateType: substrateType,
-                distanceFromWindow: distanceFromWindow,
-                humidity: humidity,
-                room: room
-            )
+            let plant = Plant(context: viewContext)
+            plant.id = UUID()
+            plant.scientificName = plantInfo.id // Store the ID from plantInfo
+            plant.customName = customName
+            plant.height = height
+            plant.potSize = potSize
+            plant.potType = potType
+            plant.lastWatering = lastWatering
+            plant.lastFertilizing = lastFertilizing
+            plant.substrateType = substrateType
+            plant.distanceFromWindow = distanceFromWindow
+            plant.humidity = humidity
+            plant.orderIndex = Int16(plants.count)
             
             // Calculate next watering date
             updateNextWateringDate(for: plant, plantInfo: plantInfo)
@@ -91,10 +76,9 @@ class PlantViewModel: ObservableObject {
                 }
                 
                 // Refresh the plants list
-                fetchPlants()
-                
-                // Post notification to dismiss search view
-                NotificationCenter.default.post(name: NSNotification.Name("DismissPlantSearch"), object: nil)
+                DispatchQueue.main.async {
+                    self.fetchPlants()
+                }
             } catch {
                 showError("Chyba při ukládání rostliny: \(error.localizedDescription)")
             }
@@ -143,7 +127,9 @@ class PlantViewModel: ObservableObject {
                 }
                 
                 // Refresh the plants list
-                fetchPlants()
+                DispatchQueue.main.async {
+                    self.fetchPlants()
+                }
             } catch {
                 showError("Chyba při ukládání změn: \(error.localizedDescription)")
             }
@@ -161,9 +147,10 @@ class PlantViewModel: ObservableObject {
                 try viewContext.save()
                 print("Successfully deleted plant")
                 
-                // Update order indices and refresh lists
-                reorderPlants()
-                fetchDeadPlants()
+                // Update order indices
+                DispatchQueue.main.async {
+                    self.reorderPlants()
+                }
             } catch {
                 showError("Chyba při mazání rostliny: \(error.localizedDescription)")
             }
@@ -193,7 +180,9 @@ class PlantViewModel: ObservableObject {
                 }
                 
                 // Refresh the plants list
-                fetchPlants()
+                DispatchQueue.main.async {
+                    self.fetchPlants()
+                }
             } catch {
                 showError("Chyba při aktualizaci zálivky: \(error.localizedDescription)")
             }
