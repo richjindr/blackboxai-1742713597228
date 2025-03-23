@@ -1,102 +1,77 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @Environment(\.managedObjectContext) private var viewContext
-    @StateObject private var plantViewModel: PlantViewModel
     @State private var notificationTime = Date()
     @State private var showingSaveConfirmation = false
-    @State private var showingDeadPlants = false
     
-    init(context: NSManagedObjectContext) {
-        _plantViewModel = StateObject(wrappedValue: PlantViewModel(context: context))
+    private let notificationManager = NotificationManager.shared
+    
+    init() {
+        let (hour, minute) = notificationManager.getNotificationTime()
+        var components = DateComponents()
+        components.hour = hour
+        components.minute = minute
+        _notificationTime = State(initialValue: Calendar.current.date(from: components) ?? Date())
     }
     
     var body: some View {
-        NavigationView {
-            Form {
-                Section(header: Text("Upozornění")) {
-                    DatePicker("Čas upozornění na zálivku",
-                              selection: $notificationTime,
-                              displayedComponents: .hourAndMinute)
-                        .onChange(of: notificationTime) { newValue in
-                            NotificationManager.shared.updateNotificationTime(to: newValue)
-                            showingSaveConfirmation = true
-                        }
-                }
-                
-                Section(header: Text("Zemřelé rostliny")) {
-                    Button {
-                        showingDeadPlants = true
-                    } label: {
-                        HStack {
-                            Text("Hřbitov rostlin")
-                            Spacer()
-                            Text("\(plantViewModel.deadPlants.count)")
-                                .foregroundColor(.secondary)
-                        }
+        Form {
+            Section(header: Text("Upozornění na zálivku")) {
+                DatePicker("Čas upozornění",
+                          selection: $notificationTime,
+                          displayedComponents: .hourAndMinute)
+                    .onChange(of: notificationTime) { newValue in
+                        saveNotificationTime(date: newValue)
                     }
-                }
                 
-                Section(header: Text("O aplikaci")) {
-                    HStack {
-                        Text("Verze")
-                        Spacer()
-                        Text("1.0.0")
-                            .foregroundColor(.secondary)
-                    }
+                Text("Upozornění přijde v nastavený čas v den, kdy má být rostlina zalita")
+                    .font(AppFonts.caption)
+                    .foregroundColor(AppColors.secondaryText)
+            }
+            
+            Section(header: Text("O aplikaci")) {
+                VStack(alignment: .leading, spacing: AppDimensions.spacing) {
+                    Text("MojeKvítko")
+                        .font(AppFonts.headline)
+                    
+                    Text("Verze 1.0")
+                        .font(AppFonts.caption)
+                        .foregroundColor(AppColors.secondaryText)
+                    
+                    Text("Aplikace pro správu zálivky pokojových rostlin")
+                        .font(AppFonts.body)
+                        .padding(.top, 4)
                 }
-            }
-            .navigationTitle("Nastavení")
-            .onAppear {
-                // Load current notification time
-                if let savedTime = UserDefaults.standard.object(forKey: "NotificationTime") as? Date {
-                    notificationTime = savedTime
-                }
-                plantViewModel.fetchDeadPlants()
-            }
-            .alert("Nastavení uloženo", isPresented: $showingSaveConfirmation) {
-                Button("OK", role: .cancel) { }
-            }
-            .sheet(isPresented: $showingDeadPlants) {
-                PlantCemeteryView(plants: plantViewModel.deadPlants)
+                .padding(.vertical, 4)
             }
         }
+        .navigationTitle("Nastavení")
+        .alert("Nastavení uloženo", isPresented: $showingSaveConfirmation) {
+            Button("OK", role: .cancel) {}
+        }
     }
-}
-
-struct PlantCemeteryView: View {
-    let plants: [Plant]
-    @Environment(\.dismiss) private var dismiss
     
-    var body: some View {
-        NavigationView {
-            List(plants) { plant in
-                VStack(alignment: .leading) {
-                    Text(plant.displayName)
-                        .font(.headline)
-                    if let scientificName = plant.scientificName {
-                        Text(scientificName)
-                            .font(.subheadline)
-                            .italic()
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-            .navigationTitle("Hřbitov rostlin")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Hotovo") {
-                        dismiss()
-                    }
-                }
-            }
-        }
+    private func saveNotificationTime(date: Date) {
+        let calendar = Calendar.current
+        let hour = calendar.component(.hour, from: date)
+        let minute = calendar.component(.minute, from: date)
+        
+        notificationManager.updateNotificationTime(to: hour, minute: minute)
+        
+        // Reschedule all notifications to the new time
+        let context = PersistenceController.shared.container.viewContext
+        let viewModel = PlantViewModel(context: context)
+        notificationManager.rescheduleNotifications(for: viewModel.plants)
+        
+        showingSaveConfirmation = true
     }
 }
 
+// MARK: - Preview Provider
 struct SettingsView_Previews: PreviewProvider {
     static var previews: some View {
-        SettingsView(context: PersistenceController.preview.container.viewContext)
+        NavigationView {
+            SettingsView()
+        }
     }
 }
