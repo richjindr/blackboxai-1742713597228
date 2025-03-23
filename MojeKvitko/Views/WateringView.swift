@@ -3,148 +3,92 @@ import SwiftUI
 struct WateringView: View {
     @ObservedObject var viewModel: PlantViewModel
     @State private var selectedDate = Date()
-    @State private var showingWateringConfirmation: Plant?
-    
-    private let calendar = Calendar.current
+    @State private var timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                // Calendar
-                CalendarView(
-                    selectedDate: $selectedDate,
-                    markedDates: viewModel.getWateringDatesForMonth(date: selectedDate),
-                    onMonthChange: { date in
-                        selectedDate = date
-                    }
-                )
-                .padding()
-                
-                // Watering List
-                VStack(spacing: 0) {
-                    ForEach(groupedWaterings.keys.sorted(), id: \.self) { date in
-                        if let plants = groupedWaterings[date] {
-                            WateringDateSection(
-                                date: date,
-                                plants: plants,
-                                onWatered: { plant in
-                                    showingWateringConfirmation = plant
-                                }
-                            )
-                        }
+        VStack(spacing: AppDimensions.spacing) {
+            // Upcoming waterings list
+            ScrollView {
+                LazyVStack(spacing: AppDimensions.spacing) {
+                    ForEach(viewModel.plants.filter { $0.nextWatering != nil }
+                        .sorted { ($0.nextWatering ?? Date()) < ($1.nextWatering ?? Date()) }
+                    ) { plant in
+                        WateringCard(plant: plant)
+                            .onTapGesture {
+                                viewModel.markPlantAsWatered(plant)
+                            }
                     }
                 }
-                .padding(.horizontal)
+                .padding()
             }
+            
+            Divider()
+            
+            // Calendar view
+            CalendarView(selectedDate: $selectedDate,
+                        markedDates: viewModel.getWateringDatesForMonth(date: selectedDate))
         }
         .navigationTitle("Zálivky")
-        .alert("Označit jako zalitou?", isPresented: Binding(
-            get: { showingWateringConfirmation != nil },
-            set: { if !$0 { showingWateringConfirmation = nil } }
-        )) {
-            Button("Zrušit", role: .cancel) {}
-            Button("Označit") {
-                if let plant = showingWateringConfirmation {
-                    viewModel.markPlantAsWatered(plant)
-                }
-                showingWateringConfirmation = nil
-            }
+        .onReceive(timer) { _ in
+            // Force view update to refresh countdown timers
+            viewModel.objectWillChange.send()
         }
-        .onAppear {
-            viewModel.fetchPlants()
-        }
-    }
-    
-    private var groupedWaterings: [Date: [Plant]] {
-        var groups: [Date: [Plant]] = [:]
-        
-        for plant in viewModel.plants where !plant.isDead {
-            if let nextWatering = plant.nextWatering {
-                // Normalize to start of day
-                let normalizedDate = calendar.startOfDay(for: nextWatering)
-                if normalizedDate >= calendar.startOfDay(for: Date()) {
-                    var plants = groups[normalizedDate] ?? []
-                    plants.append(plant)
-                    groups[normalizedDate] = plants
-                }
-            }
-        }
-        
-        return groups
     }
 }
 
-struct WateringDateSection: View {
-    let date: Date
-    let plants: [Plant]
-    let onWatered: (Plant) -> Void
+// MARK: - Watering Card
+struct WateringCard: View {
+    let plant: Plant
     
-    private let calendar = Calendar.current
+    private var isOverdue: Bool {
+        guard let nextWatering = plant.nextWatering else { return false }
+        return WateringCalculator.shared.isWateringOverdue(date: nextWatering)
+    }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(date.formattedForWatering())
-                .font(.headline)
-                .padding(.vertical, 8)
-            
-            ForEach(plants) { plant in
-                HStack {
-                    if let id = plant.scientificName {
-                        if let image = UIImage(named: id) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 40, height: 40)
-                                .clipShape(Circle())
-                        } else {
-                            Image(systemName: "leaf.fill")
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 24, height: 24)
-                                .foregroundColor(.green)
-                                .padding(8)
-                        }
-                    }
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(plant.customName ?? plant.scientificName ?? "Neznámá rostlina")
+                    .font(AppFonts.headline)
+                
+                if let nextWatering = plant.nextWatering {
+                    Text(nextWatering.formattedForWatering())
+                        .font(AppFonts.body)
+                        .foregroundColor(AppColors.secondaryText)
                     
-                    VStack(alignment: .leading) {
-                        Text(plant.customName ?? plant.scientificName ?? "Neznámá rostlina")
-                            .font(.body)
-                        if let room = plant.room {
-                            Text(room.displayName)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    Button(action: { onWatered(plant) }) {
-                        Image(systemName: "checkmark.circle")
-                            .font(.title2)
-                            .foregroundColor(.blue)
-                    }
+                    Text(WateringCalculator.shared.formatCountdown(to: nextWatering))
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(isOverdue ? AppColors.error : AppColors.text)
                 }
-                .padding(.vertical, 4)
             }
+            
+            Spacer()
+            
+            Image(systemName: "checkmark.circle")
+                .font(.title2)
+                .foregroundColor(AppColors.primary)
         }
         .padding()
-        .background(Color.secondary.opacity(0.1))
-        .cornerRadius(12)
+        .background(isOverdue ? AppColors.error.opacity(0.1) : AppColors.secondaryBackground)
+        .cornerRadius(AppDimensions.cornerRadius)
+        .overlay(
+            RoundedRectangle(cornerRadius: AppDimensions.cornerRadius)
+                .stroke(isOverdue ? AppColors.error : Color.clear, lineWidth: 1)
+        )
     }
 }
 
+// MARK: - Calendar View
 struct CalendarView: View {
     @Binding var selectedDate: Date
     let markedDates: Set<Date>
-    let onMonthChange: (Date) -> Void
     
     private let calendar = Calendar.current
-    private let daysInWeek = 7
-    private let dayNames = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"]
+    private let daysInWeek = ["Ne", "Po", "Út", "St", "Čt", "Pá", "So"]
     
     var body: some View {
-        VStack {
-            // Month Navigation
+        VStack(spacing: AppDimensions.spacing) {
+            // Month selector
             HStack {
                 Button(action: previousMonth) {
                     Image(systemName: "chevron.left")
@@ -153,7 +97,7 @@ struct CalendarView: View {
                 Spacer()
                 
                 Text(monthYearString)
-                    .font(.headline)
+                    .font(AppFonts.headline)
                 
                 Spacer()
                 
@@ -163,120 +107,109 @@ struct CalendarView: View {
             }
             .padding(.horizontal)
             
-            // Day Names
+            // Days of week
             HStack {
-                ForEach(dayNames, id: \.self) { day in
+                ForEach(daysInWeek, id: \.self) { day in
                     Text(day)
+                        .font(AppFonts.caption)
                         .frame(maxWidth: .infinity)
-                        .font(.caption)
                 }
             }
             
-            // Calendar Grid
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: daysInWeek)) {
+            // Calendar grid
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 8) {
                 ForEach(days, id: \.self) { date in
                     if let date = date {
-                        CalendarDay(
-                            date: date,
-                            isSelected: calendar.isDate(date, inSameDayAs: selectedDate),
-                            isMarked: markedDates.contains(where: { calendar.isDate($0, inSameDayAs: date) }),
-                            isToday: calendar.isDateInToday(date)
-                        )
-                        .onTapGesture {
-                            selectedDate = date
-                        }
+                        DayCell(date: date, isSelected: calendar.isDate(date, inSameDayAs: selectedDate),
+                               isMarked: markedDates.contains { calendar.isDate($0, inSameDayAs: date) })
+                            .onTapGesture {
+                                selectedDate = date
+                            }
                     } else {
                         Color.clear
                     }
                 }
             }
         }
+        .padding()
+        .background(AppColors.secondaryBackground)
+        .cornerRadius(AppDimensions.cornerRadius)
     }
     
     private var monthYearString: String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "LLLL yyyy"
+        formatter.dateFormat = "MMMM yyyy"
         formatter.locale = Locale(identifier: "cs_CZ")
-        return formatter.string(from: selectedDate).capitalized
+        return formatter.string(from: selectedDate)
     }
     
     private var days: [Date?] {
-        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: selectedDate))!
-        let daysInMonth = calendar.range(of: .day, in: .month, for: start)!.count
+        guard let monthInterval = calendar.dateInterval(of: .month, for: selectedDate),
+              let monthFirstWeek = calendar.dateInterval(of: .weekOfMonth, for: monthInterval.start),
+              let monthLastWeek = calendar.dateInterval(of: .weekOfMonth, for: monthInterval.end - 1) else {
+            return []
+        }
         
-        let firstWeekday = calendar.component(.weekday, from: start)
-        let weekdayOffset = (firstWeekday + 5) % 7 // Adjust for Monday start
+        let dateInterval = DateInterval(start: monthFirstWeek.start, end: monthLastWeek.end)
         
-        var days: [Date?] = Array(repeating: nil, count: weekdayOffset)
-        
-        for day in 1...daysInMonth {
-            if let date = calendar.date(byAdding: .day, value: day - 1, to: start) {
-                days.append(date)
+        var days = [Date?]()
+        calendar.enumerateDates(startingAfter: dateInterval.start - 1,
+                              matching: DateComponents(hour: 0, minute: 0, second: 0),
+                              matchingPolicy: .nextTime) { date, _, stop in
+            if let date = date {
+                if date > dateInterval.end {
+                    stop = true
+                } else {
+                    days.append(calendar.isDate(date, equalTo: monthInterval.start, toGranularity: .month) ? date : nil)
+                }
             }
         }
-        
-        while days.count % 7 != 0 {
-            days.append(nil)
-        }
-        
         return days
     }
     
     private func previousMonth() {
         if let newDate = calendar.date(byAdding: .month, value: -1, to: selectedDate) {
             selectedDate = newDate
-            onMonthChange(newDate)
         }
     }
     
     private func nextMonth() {
         if let newDate = calendar.date(byAdding: .month, value: 1, to: selectedDate) {
             selectedDate = newDate
-            onMonthChange(newDate)
         }
     }
 }
 
-struct CalendarDay: View {
+// MARK: - Day Cell
+struct DayCell: View {
     let date: Date
     let isSelected: Bool
     let isMarked: Bool
-    let isToday: Bool
     
     private let calendar = Calendar.current
     
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(backgroundColor)
-            
-            Text("\(calendar.component(.day, from: date))")
-                .foregroundColor(textColor)
-        }
-        .overlay(
-            Circle()
-                .stroke(isToday ? Color.blue : Color.clear, lineWidth: 1)
-        )
-        .aspectRatio(1, contentMode: .fit)
-    }
-    
-    private var backgroundColor: Color {
-        if isSelected {
-            return .blue
-        } else if isMarked {
-            return .blue.opacity(0.2)
-        }
-        return .clear
-    }
-    
-    private var textColor: Color {
-        if isSelected {
-            return .white
-        }
-        return .primary
+        Text("\(calendar.component(.day, from: date))")
+            .font(AppFonts.body)
+            .frame(height: 40)
+            .frame(maxWidth: .infinity)
+            .background(
+                ZStack {
+                    if isSelected {
+                        Circle()
+                            .fill(AppColors.primary)
+                    }
+                    if isMarked {
+                        Circle()
+                            .stroke(AppColors.primary, lineWidth: 1)
+                    }
+                }
+            )
+            .foregroundColor(isSelected ? .white : isMarked ? AppColors.primary : AppColors.text)
     }
 }
 
+// MARK: - Preview Provider
 struct WateringView_Previews: PreviewProvider {
     static var previews: some View {
         let context = PersistenceController.shared.container.viewContext
